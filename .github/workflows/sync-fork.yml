@@ -2,7 +2,12 @@
 #   - https://github.com/Bayon-IT/CIPP
 #   - https://github.com/Bayon-IT/CIPP-API
 #
-# Required secret on each fork:
+# Required secrets on each fork:
+#   FORK_SYNC_TOKEN          — fine-grained PAT with:
+#     Repository access: Bayon-IT/CIPP + Bayon-IT/CIPP-API
+#     Permissions:       Contents: Read & Write, Metadata: Read, Workflows: Read & Write
+#     (Workflows write is required because upstream CIPP commits frequently touch
+#      .github/workflows/, and the default GITHUB_TOKEN refuses those merges.)
 #   BOTZILLA_DISPATCH_TOKEN  — fine-grained PAT with:
 #     Repository access: Bayon-IT/Botzilla
 #     Permissions:       Contents: Read, Metadata: Read, Actions: Read & Write
@@ -37,18 +42,18 @@ jobs:
 
       - name: Sync fork from upstream
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
         run: gh repo sync "$GITHUB_REPOSITORY" --force
 
       - name: Fetch post-sync SHA
         id: post
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
         run: |
           git fetch origin
           DEFAULT_BRANCH=$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name)
           NEW_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH")
           echo "sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Dispatch Botzilla scan if upstream changed
         if: steps.pre.outputs.sha != steps.post.outputs.sha
