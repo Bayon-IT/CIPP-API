@@ -1,0 +1,70 @@
+# Place this at .github/workflows/sync-fork.yml in BOTH:
+#   - https://github.com/Bayon-IT/CIPP
+#   - https://github.com/Bayon-IT/CIPP-API
+#
+# Required secret on each fork:
+#   BOTZILLA_DISPATCH_TOKEN  — fine-grained PAT with:
+#     Repository access: Bayon-IT/Botzilla
+#     Permissions:       Contents: Read, Metadata: Read, Actions: Read & Write
+#
+# What it does:
+#   1. Every 2 days at 06:00 UTC, syncs the fork from upstream.
+#   2. If the default branch SHA changed, fires a repository_dispatch event
+#      (cipp-upstream-updated) at Bayon-IT/Botzilla with the repo + new SHA.
+#   3. The Botzilla workflow runs the API shape scan and opens an Autotask
+#      ticket as a paper trail.
+
+name: Sync fork from upstream
+
+on:
+  schedule:
+    - cron: "0 6 */2 * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Capture pre-sync SHA
+        id: pre
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync fork from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh repo sync "$GITHUB_REPOSITORY" --force
+
+      - name: Fetch post-sync SHA
+        id: post
+        run: |
+          git fetch origin
+          DEFAULT_BRANCH=$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name)
+          NEW_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH")
+          echo "sha=$NEW_SHA" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dispatch Botzilla scan if upstream changed
+        if: steps.pre.outputs.sha != steps.post.outputs.sha
+        env:
+          GH_TOKEN: ${{ secrets.BOTZILLA_DISPATCH_TOKEN }}
+          REPO_NAME: ${{ github.repository }}
+          NEW_SHA: ${{ steps.post.outputs.sha }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/Bayon-IT/Botzilla/dispatches \
+            -f "event_type=cipp-upstream-updated" \
+            -f "client_payload[repo]=$REPO_NAME" \
+            -f "client_payload[sha]=$NEW_SHA"
+
+      - name: Report no-op
+        if: steps.pre.outputs.sha == steps.post.outputs.sha
+        run: echo "No upstream changes since last sync (SHA still ${{ steps.pre.outputs.sha }})."
